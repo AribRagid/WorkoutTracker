@@ -88,6 +88,8 @@ button:disabled {
 .app-shell {
   max-width: 520px;
   margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100svh;
   min-height: 100dvh;
   padding-top: calc(env(safe-area-inset-top, 0px) + 12px);
   padding-right: calc(env(safe-area-inset-right, 0px) + 16px);
@@ -190,10 +192,33 @@ button:disabled {
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
-.home-tool-btn {
+.home-tool-btn {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+body.home-view-active .app-shell {
+  display: flex;
+  flex-direction: column;
+}
+
+body.home-view-active .app-header {
+  margin-bottom: clamp(14px, 3vh, 26px);
+}
+
+body.home-view-active .view-stack {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+body.home-view-active #view-home.active {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  padding-bottom: clamp(6px, 1.4vh, 14px);
 }
 
 .home-btn {
@@ -505,6 +530,8 @@ body.theme-dark .log-card strong {
   margin-top: 6px;
   font-size: 0.82rem;
   color: var(--muted);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .log-form {
@@ -753,6 +780,7 @@ body.theme-dark .alt-name {
     display: flex;
     flex-direction: column;
     justify-content: center;
+    min-height: calc(100svh - 220px);
     min-height: calc(100dvh - 220px);
   }
 }

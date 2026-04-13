@@ -307,7 +307,7 @@
               name: String(alternativeRaw.name || "").trim(),
               sets: clampInt(alternativeRaw.sets, 3, 1, 50),
               reps: normalizeRepsPattern(alternativeRaw.reps, "8"),
-              weight: clampNumber(alternativeRaw.weight, 0, 0, 5000)
+              weight: normalizeWeightPattern(alternativeRaw.weight, "0")
             }
           : null;
 
@@ -317,7 +317,7 @@
             type: normalizeType(exercise.type),
             sets: clampInt(exercise.sets, 3, 1, 50),
             reps: normalizeRepsPattern(exercise.reps, "8"),
-            weight: clampNumber(exercise.weight, 0, 0, 5000),
+            weight: normalizeWeightPattern(exercise.weight, "0"),
             perCycle: clampInt(exercise.perCycle, 3, 1, 999),
             alternative: alternative && alternative.name ? alternative : null
         };
@@ -335,7 +335,7 @@
             exerciseId,
             date: isValidDate(log.date) ? log.date : new Date().toISOString(),
             reps: normalizeRepsPattern(log.reps, "1"),
-            weight: clampNumber(log.weight, 0, 0, 5000),
+            weight: normalizeWeightPattern(log.weight, "0"),
             sets: clampInt(log.sets, 0, 0, 50),
             isAlternativeSnapshot: Boolean(log.isAlternativeSnapshot),
           exerciseNameSnapshot: snapshotName
@@ -376,6 +376,7 @@
     Object.values(ui.views).forEach((view) => view.classList.remove("active"));
     ui.views[viewName].classList.add("active");
     currentView = viewName;
+    document.body.classList.toggle("home-view-active", viewName === "home");
 
     ui.pageTitle.textContent =
       viewName === "home"
@@ -533,6 +534,8 @@
     const selected = selectedExerciseId === exercise.id;
     const hasAlternative = Boolean(exercise.alternative && exercise.alternative.name);
     const switchHint = hasAlternative ? '<span class="switch-indicator">🔁 (switch)</span>' : "";
+    const lastRepsDisplay = normalizeRepsPattern(exercise.reps, "0");
+    const lastWeightDisplay = getWeightDisplayValue(exercise.weight);
 
     return `
       <button
@@ -545,7 +548,7 @@
           <strong>${escapeHtml(exercise.name)} ${switchHint}</strong>
           <span class="badge ${reached ? "limit" : "ok"}">${reached ? "Limit reached" : `${count}/${exercise.perCycle}`}</span>
         </div>
-        <span class="log-meta">Sets ${exercise.sets} • Last reps ${exercise.reps} • Last weight ${exercise.weight}</span>
+        <span class="log-meta">Sets ${exercise.sets} • Last reps ${escapeHtml(lastRepsDisplay)} • Last weight ${escapeHtml(lastWeightDisplay)}</span>
       </button>
     `;
   }
@@ -673,9 +676,10 @@
     const regular = exerciseEditorState.regular;
     const alternative = exerciseEditorState.alternative;
     const regularRepsParsed = parseRepsPattern(regular.reps);
+    const regularWeightParsed = parseWeightPattern(regular.weight);
 
-    if (!regular.name || regular.sets < 1 || regular.perCycle < 1 || !regularRepsParsed.valid) {
-      setStatus("Regular exercise must have valid values (reps like 8 or 8>5).", true);
+    if (!regular.name || regular.sets < 1 || regular.perCycle < 1 || !regularRepsParsed.valid || !regularWeightParsed.valid) {
+      setStatus("Regular exercise must have valid reps/weight patterns (e.g. reps 8>5, weight 22.5>17.5).", true);
       return;
     }
 
@@ -685,12 +689,12 @@
               name: alternative.name.trim(),
               sets: clampInt(alternative.sets, 3, 1, 50),
               reps: normalizeRepsPattern(alternative.reps, ""),
-              weight: clampNumber(alternative.weight, 0, 0, 5000)
+              weight: normalizeWeightPattern(alternative.weight, "")
             }
           : null;
 
-    if (normalizedAlternative && !normalizedAlternative.reps) {
-      setStatus("Alternative reps must be valid (e.g. 8 or 8>5).", true);
+    if (normalizedAlternative && (!normalizedAlternative.reps || !normalizedAlternative.weight)) {
+      setStatus("Alternative reps/weight must be valid (e.g. reps 8>5, weight 22.5>17.5).", true);
       return;
     }
 
@@ -701,12 +705,12 @@
         type: normalizeType(regular.type),
         sets: clampInt(regular.sets, 3, 1, 50),
         reps: regularRepsParsed.pattern,
-        weight: clampNumber(regular.weight, 0, 0, 5000),
+        weight: regularWeightParsed.pattern,
         perCycle: clampInt(regular.perCycle, 3, 1, 999),
         alternative: normalizedAlternative
           ? {
-              ...normalizedAlternative,
-              reps: normalizedAlternative.reps
+            ...normalizedAlternative,
+            reps: normalizedAlternative.reps
             }
           : null
       });
@@ -723,7 +727,7 @@
       exercise.type = normalizeType(regular.type);
       exercise.sets = clampInt(regular.sets, 3, 1, 50);
       exercise.reps = regularRepsParsed.pattern;
-      exercise.weight = clampNumber(regular.weight, 0, 0, 5000);
+      exercise.weight = regularWeightParsed.pattern;
       exercise.perCycle = clampInt(regular.perCycle, 3, 1, 999);
       exercise.alternative = normalizedAlternative
         ? {
@@ -792,7 +796,7 @@
     target.name = ui.exerciseNameInput.value.trim();
     target.sets = clampInt(ui.exerciseSetsInput.value, 3, 1, 50);
     target.reps = ui.exerciseRepsInput.value.trim();
-    target.weight = clampNumber(ui.exerciseWeightInput.value, 0, 0, 5000);
+    target.weight = ui.exerciseWeightInput.value.trim();
 
     if (isRegular) {
       exerciseEditorState.regular.type = normalizeType(ui.exerciseTypeInput.value);
@@ -995,8 +999,8 @@
     const type = String(exercise.type || "").trim();
     const sets = Number.parseInt(exercise.sets, 10);
     const perCycle = Number.parseInt(exercise.perCycle, 10);
-    const weight = Number.parseFloat(exercise.weight);
     const repsParsed = parseRepsPattern(exercise.reps);
+    const weightParsed = parseWeightPattern(exercise.weight);
 
     if (!id || !name) {
       return { valid: false, error: "Invalid backup format. Exercise id and name are required." };
@@ -1010,7 +1014,7 @@
     if (!Number.isFinite(perCycle) || perCycle < 1 || perCycle > 999) {
       return { valid: false, error: `Invalid per-cycle limit for "${name}".` };
     }
-    if (!Number.isFinite(weight) || weight < 0 || weight > 5000) {
+    if (!weightParsed.valid) {
       return { valid: false, error: `Invalid weight value for "${name}".` };
     }
     if (!repsParsed.valid) {
@@ -1025,8 +1029,8 @@
 
       const altName = String(exercise.alternative.name || "").trim();
       const altSets = Number.parseInt(exercise.alternative.sets, 10);
-      const altWeight = Number.parseFloat(exercise.alternative.weight);
       const altReps = parseRepsPattern(exercise.alternative.reps);
+      const altWeightParsed = parseWeightPattern(exercise.alternative.weight);
 
       if (!altName) {
         return { valid: false, error: `Alternative name is required for "${name}".` };
@@ -1034,7 +1038,7 @@
       if (!Number.isFinite(altSets) || altSets < 1 || altSets > 50) {
         return { valid: false, error: `Invalid alternative sets for "${name}".` };
       }
-      if (!Number.isFinite(altWeight) || altWeight < 0 || altWeight > 5000) {
+      if (!altWeightParsed.valid) {
         return { valid: false, error: `Invalid alternative weight for "${name}".` };
       }
       if (!altReps.valid) {
@@ -1045,7 +1049,7 @@
         name: altName,
         sets: altSets,
         reps: altReps.pattern,
-        weight: altWeight
+        weight: altWeightParsed.pattern
       };
     }
 
@@ -1057,7 +1061,7 @@
         type,
         sets,
         reps: repsParsed.pattern,
-        weight,
+        weight: weightParsed.pattern,
         perCycle,
         alternative
       }
@@ -1073,7 +1077,7 @@
     const exerciseId = String(log.exerciseId || "").trim();
     const date = String(log.date || "");
     const repsParsed = parseRepsPattern(log.reps);
-    const weight = Number.parseFloat(log.weight);
+    const weightParsed = parseWeightPattern(log.weight);
     const sets = Number.parseInt(log.sets, 10);
     const snapshotName = String(log.exerciseNameSnapshot || "").trim();
 
@@ -1086,7 +1090,7 @@
     if (!repsParsed.valid) {
       return { valid: false, error: "Invalid backup format. One or more log reps values are invalid." };
     }
-    if (!Number.isFinite(weight) || weight < 0 || weight > 5000) {
+    if (!weightParsed.valid) {
       return { valid: false, error: "Invalid backup format. One or more log weights are invalid." };
     }
     if (!Number.isFinite(sets) || sets < 0 || sets > 50) {
@@ -1100,7 +1104,7 @@
         exerciseId,
         date: new Date(date).toISOString(),
         reps: repsParsed.pattern,
-        weight,
+        weight: weightParsed.pattern,
         sets,
         isAlternativeSnapshot: Boolean(log.isAlternativeSnapshot),
         exerciseNameSnapshot: snapshotName
@@ -1150,10 +1154,14 @@
     }
 
     const repsParsed = parseRepsPattern(ui.logRepsInput.value);
-    const weight = clampNumber(ui.logWeightInput.value, 0, 0, 5000);
+    const weightParsed = parseWeightPattern(ui.logWeightInput.value);
 
     if (!repsParsed.valid) {
       setStatus("Reps must be valid (e.g. 8 or 8>5).", true);
+      return;
+    }
+    if (!weightParsed.valid) {
+      setStatus("Weight must be valid (e.g. 100 or 22.5>17.5).", true);
       return;
     }
 
@@ -1162,9 +1170,11 @@
     const usedName = variantData ? variantData.name : exercise.name;
     const usedSets = variantData ? variantData.sets : exercise.sets;
     const reps = repsParsed.pattern;
+    const weight = weightParsed.pattern;
     const loggedRepTotal = repsParsed.total;
     const storedRepTotal = getRepsTotal(variantData ? variantData.reps : exercise.reps);
-    const storedWeight = clampNumber(variantData ? variantData.weight : exercise.weight, 0, 0, 5000);
+    const loggedWeightTotal = getWeightTotalForComparison(weight, usedSets);
+    const storedWeightTotal = getWeightTotalForComparison(variantData ? variantData.weight : exercise.weight, usedSets);
 
     appState.logs.push({
       id: createId(),
@@ -1177,12 +1187,15 @@
       exerciseNameSnapshot: usedName
     });
 
-    // Only update stored exercise values when the new log is not worse.
-    const isWorse =
-      weight < storedWeight ||
-      (weight === storedWeight && loggedRepTotal < storedRepTotal);
+    // Weight-first comparison:
+    // 1) lower weight => never update, 2) higher weight => always update,
+    // 3) equal weight => compare rep totals.
+    const weightComparison = compareNumberTotals(loggedWeightTotal, storedWeightTotal);
+    const shouldUpdateStoredValues =
+      weightComparison > 0 ||
+      (weightComparison === 0 && loggedRepTotal >= storedRepTotal);
 
-    if (!isWorse) {
+    if (shouldUpdateStoredValues) {
       if (usedVariant === "alternative" && exercise.alternative) {
         exercise.alternative.reps = reps;
         exercise.alternative.weight = weight;
@@ -1340,16 +1353,16 @@
 
     const exercise = getExerciseById(exerciseId);
     if (!exercise) {
-      return { reps: 0, weight: 0 };
+      return { reps: "0", weight: "0" };
     }
 
     const variantData = getExerciseVariant(exercise, variant);
     const fallback = variantData
-      ? { reps: variantData.reps, weight: variantData.weight }
-      : { reps: exercise.reps, weight: exercise.weight };
+      ? { reps: normalizeRepsPattern(variantData.reps, "0"), weight: getWeightDisplayValue(variantData.weight) }
+      : { reps: normalizeRepsPattern(exercise.reps, "0"), weight: getWeightDisplayValue(exercise.weight) };
 
     return latest
-      ? { reps: latest.reps, weight: latest.weight }
+      ? { reps: normalizeRepsPattern(latest.reps, "0"), weight: getWeightDisplayValue(latest.weight) }
       : fallback;
   }
 
@@ -1397,7 +1410,7 @@
     ui.selectedExerciseName.textContent = variantData ? variantData.name : exercise.name;
     ui.selectedExerciseMeta.textContent = `${exercise.type} • Sets: ${variantData ? variantData.sets : exercise.sets} • Per cycle: ${exercise.perCycle}`;
     ui.logRepsInput.value = String(lastValues.reps);
-    ui.logWeightInput.value = String(lastValues.weight);
+    ui.logWeightInput.value = getWeightDisplayValue(lastValues.weight);
   }
 
   function groupExercisesByType(exercises) {
@@ -1520,6 +1533,36 @@
     return { valid: true, pattern: parts.join(">"), total };
   }
 
+  function parseWeightPattern(value) {
+    const raw = String(value ?? "").trim();
+    if (!raw) {
+      return { valid: false, pattern: "", total: 0, values: [] };
+    }
+
+    const parts = raw.split(">").map((part) => part.trim());
+    if (!parts.length || parts.some((part) => part.length === 0)) {
+      return { valid: false, pattern: "", total: 0, values: [] };
+    }
+
+    const values = [];
+    let total = 0;
+    for (const part of parts) {
+      if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(part)) {
+        return { valid: false, pattern: "", total: 0, values: [] };
+      }
+
+      const amount = Number.parseFloat(part);
+      if (!Number.isFinite(amount) || amount < 0 || amount > 5000) {
+        return { valid: false, pattern: "", total: 0, values: [] };
+      }
+
+      values.push(amount);
+      total += amount;
+    }
+
+    return { valid: true, pattern: parts.join(">"), total, values };
+  }
+
   function normalizeRepsPattern(value, fallback = "8") {
     const parsed = parseRepsPattern(value);
     if (parsed.valid) {
@@ -1531,6 +1574,45 @@
   function getRepsTotal(value) {
     const parsed = parseRepsPattern(value);
     return parsed.valid ? parsed.total : 0;
+  }
+
+  function normalizeWeightPattern(value, fallback = "0") {
+    const parsed = parseWeightPattern(value);
+    if (parsed.valid) {
+      return parsed.pattern;
+    }
+    return fallback;
+  }
+
+  // For comparison, a single weight value is treated as applied to every set.
+  function getWeightTotalForComparison(pattern, sets) {
+    const parsed = parseWeightPattern(pattern);
+    if (!parsed.valid) {
+      return 0;
+    }
+
+    const setCount = clampInt(sets, 1, 1, 50);
+    if (parsed.values.length === 1 && setCount > 1) {
+      return parsed.values[0] * setCount;
+    }
+
+    return parsed.total;
+  }
+
+  function compareNumberTotals(a, b, epsilon = 1e-9) {
+    if (Math.abs(a - b) <= epsilon) {
+      return 0;
+    }
+    return a > b ? 1 : -1;
+  }
+
+  function getWeightDisplayValue(value) {
+    const parsed = parseWeightPattern(value);
+    if (parsed.valid) {
+      return parsed.pattern;
+    }
+    const raw = String(value ?? "").trim();
+    return raw || "0";
   }
 
   function isValidDate(value) {
