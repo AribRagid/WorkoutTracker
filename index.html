@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f4f8ff" />
+  <meta name="color-scheme" content="light dark" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Gym Tracker" />
@@ -31,6 +32,11 @@
           <button class="home-btn" data-nav="list">List</button>
           <button class="home-btn" data-nav="history">History</button>
           <button class="home-btn" data-nav="log">Log</button>
+        </div>
+        <div class="home-tools">
+          <button id="exportDataBtn" class="ghost-btn home-tool-btn" type="button">Export Data</button>
+          <button id="importDataBtn" class="ghost-btn home-tool-btn" type="button">Import Data</button>
+          <input id="importFileInput" class="hidden" type="file" accept=".json,application/json" />
         </div>
       </section>
 
@@ -187,6 +193,19 @@
       <div class="modal-actions">
         <button id="cancelDeleteBtn" type="button" class="ghost-btn">Cancel</button>
         <button id="confirmDeleteBtn" type="button" class="secondary-btn danger-btn">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="importConfirmModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="importConfirmTitle">
+      <h2 id="importConfirmTitle">Import Data</h2>
+      <p class="muted" id="importConfirmText">
+        Are you sure you want to import this data? This will erase your current exercises and history and replace them with the imported file.
+      </p>
+      <div class="modal-actions">
+        <button id="cancelImportBtn" type="button" class="ghost-btn">Cancel</button>
+        <button id="confirmImportBtn" type="button" class="secondary-btn danger-btn">Import</button>
       </div>
     </div>
   </div>

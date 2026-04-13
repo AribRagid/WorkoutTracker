@@ -11,6 +11,9 @@
   const STATE_ID = "main";
   const FALLBACK_KEY = "gymTrackerState";
   const THEME_PREF_KEY = "gymTrackerTheme";
+  const EXPORT_FILENAME = "workout-tracker-backup.json";
+  const THEME_COLOR_LIGHT = "#eaf1ff";
+  const THEME_COLOR_DARK = "#111214";
 
   const DEFAULT_STATE = {
     cycleLength: 7,
@@ -27,6 +30,7 @@
   let exerciseEditorState = null;
   let pendingDeleteExerciseId = null;
   let pendingDeleteMode = "exercise";
+  let pendingImportState = null;
   let historyWeekStart = null;
   let selectedHistoryDate = "";
 
@@ -115,6 +119,9 @@
     ui.pageTitle = document.getElementById("pageTitle");
     ui.homeSubtitle = document.getElementById("homeSubtitle");
     ui.themeToggleBtn = document.getElementById("themeToggleBtn");
+    ui.exportDataBtn = document.getElementById("exportDataBtn");
+    ui.importDataBtn = document.getElementById("importDataBtn");
+    ui.importFileInput = document.getElementById("importFileInput");
 
     ui.views = {
       home: document.getElementById("view-home"),
@@ -175,6 +182,10 @@
     ui.deleteConfirmText = document.getElementById("deleteConfirmText");
     ui.cancelDeleteBtn = document.getElementById("cancelDeleteBtn");
     ui.confirmDeleteBtn = document.getElementById("confirmDeleteBtn");
+
+    ui.importConfirmModal = document.getElementById("importConfirmModal");
+    ui.cancelImportBtn = document.getElementById("cancelImportBtn");
+    ui.confirmImportBtn = document.getElementById("confirmImportBtn");
   }
 
   function attachEvents() {
@@ -182,6 +193,11 @@
       button.addEventListener("click", () => showView(button.dataset.nav));
     });
     ui.themeToggleBtn.addEventListener("click", toggleTheme);
+    ui.exportDataBtn.addEventListener("click", exportData);
+    ui.importDataBtn.addEventListener("click", () => {
+      ui.importFileInput.click();
+    });
+    ui.importFileInput.addEventListener("change", handleImportFileSelected);
 
     ui.addExerciseBtn.addEventListener("click", openAddExerciseModal);
     ui.cancelExerciseBtn.addEventListener("click", () => closeModal(ui.exerciseModal));
@@ -265,8 +281,10 @@
 
     ui.cancelDeleteBtn.addEventListener("click", () => closeModal(ui.deleteConfirmModal));
     ui.confirmDeleteBtn.addEventListener("click", handleConfirmDeleteExercise);
+    ui.cancelImportBtn.addEventListener("click", () => closeModal(ui.importConfirmModal));
+    ui.confirmImportBtn.addEventListener("click", handleConfirmImport);
 
-    [ui.exerciseModal, ui.cycleModal, ui.deleteConfirmModal].forEach((modal) => {
+    [ui.exerciseModal, ui.cycleModal, ui.deleteConfirmModal, ui.importConfirmModal].forEach((modal) => {
       modal.addEventListener("click", (event) => {
         if (event.target === modal) {
           closeModal(modal);
@@ -839,6 +857,257 @@
     renderHistoryPage();
   }
 
+  function exportData() {
+    try {
+      const backup = buildBackupState();
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = EXPORT_FILENAME;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setStatus(`Exported ${EXPORT_FILENAME}.`);
+    } catch (error) {
+      console.warn("Export failed.", error);
+      setStatus("Export failed. Please try again.", true);
+    }
+  }
+
+  async function handleImportFileSelected(event) {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    let parsed;
+    try {
+      const text = await file.text();
+      parsed = JSON.parse(text);
+    } catch (error) {
+      setStatus("Invalid file. Please choose a valid JSON backup.", true);
+      return;
+    }
+
+    const validated = validateImportedState(parsed);
+    if (!validated.valid) {
+      setStatus(validated.error, true);
+      return;
+    }
+
+    pendingImportState = validated.state;
+    openModal(ui.importConfirmModal);
+  }
+
+  async function handleConfirmImport() {
+    if (!pendingImportState) {
+      closeModal(ui.importConfirmModal);
+      return;
+    }
+
+    appState = deepClone(pendingImportState);
+    sanitizeState();
+    if (!appState.cycleStart) {
+      appState.cycleStart = todayYMD();
+    }
+
+    selectedExerciseId = null;
+    selectedLogVariant = "regular";
+    exerciseEditorState = null;
+
+    await ensureCurrentCycle();
+    await storage.save(appState);
+
+    closeLogOverlay(true);
+    closeModal(ui.importConfirmModal);
+    renderAll();
+    setStatus("Imported backup data.");
+  }
+
+  function buildBackupState() {
+    return {
+      cycleLength: clampInt(appState.cycleLength, 7, 1, 365),
+      cycleStart: isValidYMD(appState.cycleStart) ? appState.cycleStart : todayYMD(),
+      exercises: deepClone(appState.exercises),
+      logs: deepClone(appState.logs)
+    };
+  }
+
+  function validateImportedState(payload) {
+    if (!isPlainObject(payload)) {
+      return { valid: false, error: "Invalid backup format. Expected a JSON object." };
+    }
+
+    if (!Array.isArray(payload.exercises) || !Array.isArray(payload.logs)) {
+      return { valid: false, error: "Invalid backup format. Exercises and logs must be arrays." };
+    }
+
+    const parsedCycleLength = Number.parseInt(payload.cycleLength, 10);
+    if (!Number.isFinite(parsedCycleLength) || parsedCycleLength < 1 || parsedCycleLength > 365) {
+      return { valid: false, error: "Invalid backup format. Cycle length must be between 1 and 365." };
+    }
+    if (typeof payload.cycleStart !== "string" || !isValidYMD(payload.cycleStart)) {
+      return { valid: false, error: "Invalid backup format. Cycle start date is invalid." };
+    }
+
+    const imported = {
+      cycleLength: parsedCycleLength,
+      cycleStart: payload.cycleStart,
+      exercises: [],
+      logs: []
+    };
+    const seenExerciseIds = new Set();
+
+    for (const exercise of payload.exercises) {
+      const normalized = normalizeImportedExercise(exercise);
+      if (!normalized.valid) {
+        return { valid: false, error: normalized.error };
+      }
+      if (seenExerciseIds.has(normalized.exercise.id)) {
+        return { valid: false, error: `Invalid backup format. Duplicate exercise id "${normalized.exercise.id}".` };
+      }
+      seenExerciseIds.add(normalized.exercise.id);
+      imported.exercises.push(normalized.exercise);
+    }
+
+    for (const log of payload.logs) {
+      const normalized = normalizeImportedLog(log);
+      if (!normalized.valid) {
+        return { valid: false, error: normalized.error };
+      }
+      imported.logs.push(normalized.log);
+    }
+
+    imported.exercises.sort(sortByTypeThenName);
+    return { valid: true, state: imported };
+  }
+
+  function normalizeImportedExercise(exercise) {
+    if (!isPlainObject(exercise)) {
+      return { valid: false, error: "Invalid backup format. Every exercise must be an object." };
+    }
+
+    const id = String(exercise.id || "").trim();
+    const name = String(exercise.name || "").trim();
+    const type = String(exercise.type || "").trim();
+    const sets = Number.parseInt(exercise.sets, 10);
+    const perCycle = Number.parseInt(exercise.perCycle, 10);
+    const weight = Number.parseFloat(exercise.weight);
+    const repsParsed = parseRepsPattern(exercise.reps);
+
+    if (!id || !name) {
+      return { valid: false, error: "Invalid backup format. Exercise id and name are required." };
+    }
+    if (!EXERCISE_TYPES.includes(type)) {
+      return { valid: false, error: `Invalid type for "${name}".` };
+    }
+    if (!Number.isFinite(sets) || sets < 1 || sets > 50) {
+      return { valid: false, error: `Invalid sets value for "${name}".` };
+    }
+    if (!Number.isFinite(perCycle) || perCycle < 1 || perCycle > 999) {
+      return { valid: false, error: `Invalid per-cycle limit for "${name}".` };
+    }
+    if (!Number.isFinite(weight) || weight < 0 || weight > 5000) {
+      return { valid: false, error: `Invalid weight value for "${name}".` };
+    }
+    if (!repsParsed.valid) {
+      return { valid: false, error: `Invalid reps pattern for "${name}".` };
+    }
+
+    let alternative = null;
+    if (exercise.alternative !== undefined && exercise.alternative !== null) {
+      if (!isPlainObject(exercise.alternative)) {
+        return { valid: false, error: `Invalid alternative data for "${name}".` };
+      }
+
+      const altName = String(exercise.alternative.name || "").trim();
+      const altSets = Number.parseInt(exercise.alternative.sets, 10);
+      const altWeight = Number.parseFloat(exercise.alternative.weight);
+      const altReps = parseRepsPattern(exercise.alternative.reps);
+
+      if (!altName) {
+        return { valid: false, error: `Alternative name is required for "${name}".` };
+      }
+      if (!Number.isFinite(altSets) || altSets < 1 || altSets > 50) {
+        return { valid: false, error: `Invalid alternative sets for "${name}".` };
+      }
+      if (!Number.isFinite(altWeight) || altWeight < 0 || altWeight > 5000) {
+        return { valid: false, error: `Invalid alternative weight for "${name}".` };
+      }
+      if (!altReps.valid) {
+        return { valid: false, error: `Invalid alternative reps for "${name}".` };
+      }
+
+      alternative = {
+        name: altName,
+        sets: altSets,
+        reps: altReps.pattern,
+        weight: altWeight
+      };
+    }
+
+    return {
+      valid: true,
+      exercise: {
+        id,
+        name,
+        type,
+        sets,
+        reps: repsParsed.pattern,
+        weight,
+        perCycle,
+        alternative
+      }
+    };
+  }
+
+  function normalizeImportedLog(log) {
+    if (!isPlainObject(log)) {
+      return { valid: false, error: "Invalid backup format. Every log must be an object." };
+    }
+
+    const id = String(log.id || "").trim();
+    const exerciseId = String(log.exerciseId || "").trim();
+    const date = String(log.date || "");
+    const repsParsed = parseRepsPattern(log.reps);
+    const weight = Number.parseFloat(log.weight);
+    const sets = Number.parseInt(log.sets, 10);
+    const snapshotName = String(log.exerciseNameSnapshot || "").trim();
+
+    if (!id || !exerciseId) {
+      return { valid: false, error: "Invalid backup format. Log id and exerciseId are required." };
+    }
+    if (!isValidDate(date)) {
+      return { valid: false, error: "Invalid backup format. One or more log dates are invalid." };
+    }
+    if (!repsParsed.valid) {
+      return { valid: false, error: "Invalid backup format. One or more log reps values are invalid." };
+    }
+    if (!Number.isFinite(weight) || weight < 0 || weight > 5000) {
+      return { valid: false, error: "Invalid backup format. One or more log weights are invalid." };
+    }
+    if (!Number.isFinite(sets) || sets < 0 || sets > 50) {
+      return { valid: false, error: "Invalid backup format. One or more log sets values are invalid." };
+    }
+
+    return {
+      valid: true,
+      log: {
+        id,
+        exerciseId,
+        date: new Date(date).toISOString(),
+        reps: repsParsed.pattern,
+        weight,
+        sets,
+        isAlternativeSnapshot: Boolean(log.isAlternativeSnapshot),
+        exerciseNameSnapshot: snapshotName
+      }
+    };
+  }
+
   async function handleCycleSubmit(event) {
     event.preventDefault();
 
@@ -970,6 +1239,10 @@
     if (modal === ui.exerciseModal) {
       exerciseEditorState = null;
     }
+
+    if (modal === ui.importConfirmModal) {
+      pendingImportState = null;
+    }
   }
 
   function closeLogOverlay(clearSelection = true) {
@@ -1011,13 +1284,23 @@
 
   function applyTheme(theme, persist = true) {
     const isDark = theme === "dark";
+    document.documentElement.classList.toggle("theme-dark", isDark);
     document.body.classList.toggle("theme-dark", isDark);
-    ui.themeToggleBtn.textContent = isDark ? "☀" : "☾";
+    ui.themeToggleBtn.innerHTML = `<span class="toggle-glyph">${isDark ? "☀" : "☾"}</span>`;
     ui.themeToggleBtn.setAttribute("aria-label", isDark ? "Switch to light mode" : "Switch to dark mode");
+    document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+    updateThemeMeta(isDark);
 
     if (persist) {
       localStorage.setItem(THEME_PREF_KEY, isDark ? "dark" : "light");
     }
+  }
+
+  function updateThemeMeta(isDark) {
+    const color = isDark ? THEME_COLOR_DARK : THEME_COLOR_LIGHT;
+    document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+      meta.setAttribute("content", color);
+    });
   }
 
   function getExerciseById(id) {
@@ -1201,6 +1484,14 @@
       return fallback;
     }
     return Math.min(Math.max(parsed, min), max);
+  }
+
+  function deepClone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function isPlainObject(value) {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
   }
 
   function parseRepsPattern(value) {
